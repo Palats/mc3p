@@ -241,6 +241,7 @@ def parse_packet(stream, msg_spec, side):
     msg_parser = msg_spec[msgtype]
     msg = msg_parser.parse(stream)
     msg['raw_bytes'] = stream.packet_finished()
+    logger.debug("Message (size %i): %s", len(msg['raw_bytes']), msg)
     return Message(msg)
 
 

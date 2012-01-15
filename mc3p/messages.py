@@ -24,15 +24,27 @@ protocol = {}
 protocol[0] = [None] * 256, [None] * 256
 cli_msgs, srv_msgs = protocol[0]
 
-cli_msgs[0x01] = defmsg(0x01,"Login Request",[
-    ('proto_version',MC_int),
+class login_request_msg(base_login_request_msg):
+    """Helper class to declare client login request messages. This packet is a
+    bit special as it is both protocol version dependent and used to determine version to
+    use.
+    """
+    def __init__(self, fields):
+        self.fields = fields
+        super(login_request_msg, self).__init__(0x01, "Login Request")
+
+    def get_fields(self, proto_version):
+        return protocol[proto_version][0][0x01].fields
+
+cli_msgs[0x01] = login_request_msg([
     ('username',MC_string),
-    ('nu1',MC_long),
+    ('nu1', MC_long),
     ('nu2', MC_int),
     ('nu3', MC_byte),
     ('nu4', MC_byte),
     ('nu5', MC_unsigned_byte),
     ('nu6', MC_unsigned_byte)])
+
 srv_msgs[0x01] = defmsg(0x01,"Login Response",[
     ('eid',MC_int),
     ('reserved',MC_string),
@@ -505,3 +517,44 @@ srv_msgs[0x6b] = defmsg(0x6b, "Creative inventory action", [
 
 protocol[22] = tuple(map(list, protocol[21]))
 cli_msgs, srv_msgs = protocol[22]
+
+### version 23 - 1.1
+protocol[23] = tuple(map(list, protocol[22]))
+cli_msgs, srv_msgs = protocol[23]
+
+cli_msgs[0x01] = login_request_msg([
+    ('username',MC_string),
+    ('nu1', MC_long),
+    ('nu7', MC_string),
+    ('nu2', MC_int),
+    ('nu3', MC_byte),
+    ('nu4', MC_byte),
+    ('nu5', MC_unsigned_byte),
+    ('nu6', MC_unsigned_byte)])
+srv_msgs[0x01] = defmsg(0x01,"Login Response",[
+    ('eid',MC_int),
+    ('reserved',MC_string),
+    ('map_seed',MC_long),
+    ('level_type',MC_string),
+    ('server_mode', MC_int),
+    ('dimension', MC_byte),
+    ('difficulty', MC_byte),
+    ('world_height', MC_unsigned_byte),
+    ('max_players', MC_unsigned_byte)])
+
+cli_msgs[0x09] = \
+srv_msgs[0x09] = defmsg(0x09, "Respawn", [
+    ('world', MC_byte),
+    ('difficulty', MC_byte),
+    ('mode', MC_byte),
+    ('world_height', MC_short),
+    ('map_seed', MC_long),
+    ('level_type', MC_string)])
+
+cli_msgs[0x1b] = None
+srv_msgs[0x1b] = None
+
+cli_msgs[0xfa] = \
+srv_msgs[0xfa] = defmsg(0xfa, "Plugin message", [
+    ('channel', MC_string),
+    ('plugin_data', MC_plugin_data)])

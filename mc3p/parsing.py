@@ -22,9 +22,27 @@ logger = logging.getLogger('parsing')
 class Parsem(object):
     """Parser/emitter."""
 
-    def __init__(self,parser,emitter):
-        setattr(self,'parse',parser)
-        setattr(self,'emit',emitter)
+    def __init__(self, parser=None, emitter=None):
+        if parser:
+            self.parse = parser
+        if emitter:
+            self.emit = emitter
+
+    def _parse_fields(self, stream, fields):
+        msg = {}
+        for (name,parsem) in fields:
+            msg[name] = parsem.parse(stream)
+        return msg
+
+    def _emit_fields(self, msg, fields):
+        return ''.join([parsem.emit(msg[name]) for (name,parsem) in fields])
+
+    def parse(self, stream):
+        raise NotImplementedError
+
+    def emit(self, msg):
+        raise NotImplementedError
+
 
 def parse_byte(stream):
     return struct.unpack_from(">b",stream.read(1))[0]
@@ -33,17 +51,58 @@ def emit_byte(b):
     return struct.pack(">b",b)
 
 
-def defmsg(msgtype, name, pairs):
+class defmsg(Parsem):
     """Build a Parsem for a message out of (name,Parsem) pairs."""
-    def parse(stream):
-        msg = {'msgtype': msgtype}
-        for (name,parsem) in pairs:
-            msg[name] = parsem.parse(stream)
+    def __init__(self, msgtype, name, fields):
+        self.msgtype = msgtype
+        self.name = name
+        self.fields = fields
+        super(defmsg, self).__init__()
+
+    def parse(self, stream):
+        msg = {'msgtype': self.msgtype}
+        msg.update(self._parse_fields(stream, self.fields))
         return msg
-    def emit(msg):
+
+    def emit(self, msg):
+        return ''.join([emit_unsigned_byte(self.msgtype), self._emit_fields(msg, self.fields)])
+
+
+class base_login_request_msg(Parsem):
+    """Base class for login request messages.
+
+    The login request from the client needs some special handling. It's format is
+    dependent on protcol version since minecraft 1.1. But given that its content
+    is used to determine which protocol to use, we cannot rely on the usual
+    protocol[] approach to switch between formats.
+
+    To be able to find the right fields definition, the class needs to be
+    overloaded with a function providing them. Given that this module (parsing)
+    does not know about the protocol[] array, that needs to be done in messages
+    module directly to keep things properly separated.
+    """
+    def __init__(self, msgtype, name):
+        self.msgtype = msgtype
+        self.name = name
+        super(base_login_request_msg, self).__init__()
+
+    def get_fields(self, proto_version):
+        raise NotImplementedError
+
+    def parse(self, stream):
+        msg = {'msgtype': self.msgtype}
+
+        msg['proto_version'] = parse_int(stream)
+        fields = self.get_fields(msg['proto_version'])
+        msg.update(self._parse_fields(stream, fields))
+        return msg
+
+    def emit(self, msg):
+        fields = self.get_fields(msg['proto_version'])
         return ''.join([emit_unsigned_byte(msgtype),
-                        ''.join([parsem.emit(msg[name]) for (name,parsem) in pairs])])
-    return Parsem(parse,emit)
+                        emit_int(msg['proto_version']),
+                        self._emit_fields(msg, fields)])
+
 
 MC_byte = Parsem(parse_byte,emit_byte)
 
@@ -329,4 +388,13 @@ def emit_fireball_data(data):
     return str
 
 MC_fireball_data = Parsem(parse_fireball_data, emit_fireball_data)
+
+def parse_plugin_data(stream):
+    n = parse_short(stream)
+    return { 'length': n, 'data': stream.read(n) }
+
+def emit_plugin_data(msg):
+    return ''.join([emit_short(msg['length']), msg['data']])
+
+MC_plugin_data = Parsem(parse_plugin_data, emit_plugin_data)
 

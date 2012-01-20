@@ -66,7 +66,7 @@ and forward that connection to <host>:<port>."""
     return (host, port, opts)
 
 
-class MCBot(protocol.Protocol):
+class MCProtocol(protocol.Protocol):
     def connectionMade(self):
         logging.debug('Protocol connectionMade.')
 
@@ -81,6 +81,7 @@ class MCBot(protocol.Protocol):
         msgtype = msg['msgtype']
         msg_emitter = self.send_spec[msgtype]
         s = msg_emitter.emit(msg)
+        logger.debug("Sending message (size %i): %s = %r", len(s), msg, s)
         self.transport.write(s)
 
     def _parsePacket(self):
@@ -94,7 +95,7 @@ class MCBot(protocol.Protocol):
             msg_parser = self.receive_spec[msgtype]
             msg = msg_parser.parse(self.stream)
             msg['raw_bytes'] = self.stream.packet_finished()
-            logger.debug("Message (size %i): %s", len(msg['raw_bytes']), msg)
+            logger.debug("Received message (size %i): %s", len(msg['raw_bytes']), msg)
             return msg
         except util.PartialPacketException:
             return None
@@ -123,6 +124,10 @@ class MCBot(protocol.Protocol):
                 'nu6': 0,
                 'nu7': '',
              })
+
+
+class MCBot(MCProtocol):
+    pass
 
 
 class MCBotFactory(protocol.ReconnectingClientFactory):

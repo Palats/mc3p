@@ -75,9 +75,7 @@ class MCProtocol(protocol.Protocol):
         self.receive_spec = messages.protocol[self.protocol_id][1]
         self.stream = util.Stream()
 
-        self.sendPacket({'msgtype': packets.HANDSHAKE, 'username': 'palatstest'})
-
-    def sendPacket(self, msg):
+    def sendMessage(self, msg):
         msgtype = msg['msgtype']
         msg_emitter = self.send_spec[msgtype]
         s = msg_emitter.emit(msg)
@@ -106,13 +104,22 @@ class MCProtocol(protocol.Protocol):
         msg = self._parsePacket()
         while msg:
             # Do something
-            self.dispatch(msg)
+            self.messageReceived(msg)
             msg = self._parsePacket()
 
-    def dispatch(self, msg):
+    def messageReceived(self, msg):
+        pass
+
+
+class MCBot(MCProtocol):
+    def connectionMade(self):
+        MCProtocol.connectionMade(self)
+        self.sendMessage({'msgtype': packets.HANDSHAKE, 'username': 'palatstest'})
+
+    def messageReceived(self, msg):
         if msg['msgtype'] == packets.HANDSHAKE:
             logger.debug('Handshake done, hash: %s', msg['hash'])
-            self.sendPacket({
+            self.sendMessage({
                 'msgtype': packets.LOGIN,
                 'proto_version': 23,
                 'username': 'palatstest',
@@ -124,10 +131,6 @@ class MCProtocol(protocol.Protocol):
                 'nu6': 0,
                 'nu7': '',
              })
-
-
-class MCBot(MCProtocol):
-    pass
 
 
 class MCBotFactory(protocol.ReconnectingClientFactory):

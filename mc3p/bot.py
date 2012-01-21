@@ -79,7 +79,7 @@ class MCProtocol(protocol.Protocol):
         msgtype = msg['msgtype']
         msg_emitter = self.send_spec[msgtype]
         s = msg_emitter.emit(msg)
-        logger.debug("Sending message (size %i): %s = %r", len(s), msg, s)
+        #logger.debug("Sending message (size %i): %s = %r", len(s), msg, s)
         self.transport.write(s)
 
     def _parsePacket(self):
@@ -89,11 +89,11 @@ class MCProtocol(protocol.Protocol):
             msgtype = parsing.parse_unsigned_byte(self.stream)
             if not self.receive_spec[msgtype]:
                 raise parsing.UnsupportedPacketException(msgtype)
-            logging.debug("Trying to parse message type %x" % (msgtype))
+            #logging.debug("Trying to parse message type %x" % (msgtype))
             msg_parser = self.receive_spec[msgtype]
             msg = msg_parser.parse(self.stream)
             msg['raw_bytes'] = self.stream.packet_finished()
-            logger.debug("Received message (size %i): %s", len(msg['raw_bytes']), msg)
+            #logger.debug("Received message (size %i): %s", len(msg['raw_bytes']), msg)
             return msg
         except util.PartialPacketException:
             return None
@@ -111,13 +111,81 @@ class MCProtocol(protocol.Protocol):
         pass
 
 
+class Player(object):
+    def __init__(self):
+        self.x = self.y = self.z = 0.0
+        self.stance = 0.0
+        self.yaw = self.pitch = 0.0
+        self.on_ground = True
+
+    def fromMessage(self, msg):
+        self.x = msg['x']
+        self.y = msg['y']
+        self.z = msg['z']
+        self.stance = msg['stance']
+        self.yaw = msg['yaw']
+        self.pitch = msg['pitch']
+        self.on_ground = msg['on_ground']
+
+    def toMessage(self):
+        msg = {
+                'x': self.x,
+                'y': self.y,
+                'z': self.z,
+                'stance': self.stance,
+                'yaw': self.yaw,
+                'pitch': self.pitch,
+                'on_ground': self.on_ground,
+        }
+        return msg
+
+
+class Spawn(object):
+    def __init__(self):
+        self.x = self.y = self.z = 0.0
+
+    def fromMessage(self, msg):
+        self.x = msg['x']
+        self.y = msg['y']
+        self.z = msg['z']
+
+    def toMessage(self):
+        msg = {
+                'x': self.x,
+                'y': self.y,
+                'z': self.z,
+        }
+        return msg
+
+
 class MCBot(MCProtocol):
     def connectionMade(self):
         MCProtocol.connectionMade(self)
+
+        self.delayed_call = None
+        self.time = None
+        self.player = Player()
+        self.spawn = Spawn()
+        self.players = {}
+
         self.sendMessage({'msgtype': packets.HANDSHAKE, 'username': 'palatstest'})
 
+    def backgroundUpdate(self):
+        msg = {'msgtype': packets.PLAYERPOSITIONLOOK}
+        msg.update(self.player.toMessage())
+        self.sendMessage(msg)
+
+        if self.delayed_call:
+            self.delayed_call.reset()
+        else:
+            reactor.callLater(0.050, self.backgroundUpdate)
+
     def messageReceived(self, msg):
-        if msg['msgtype'] == packets.HANDSHAKE:
+        if msg['msgtype'] == packets.KEEPALIVE:
+            self.sendMessage({'msgtype': packets.KEEPALIVE, 'id': 0})
+        elif msg['msgtype'] == packets.LOGIN:
+            pass
+        elif msg['msgtype'] == packets.HANDSHAKE:
             logger.debug('Handshake done, hash: %s', msg['hash'])
             self.sendMessage({
                 'msgtype': packets.LOGIN,
@@ -131,6 +199,26 @@ class MCBot(MCProtocol):
                 'nu6': 0,
                 'nu7': '',
              })
+        elif msg['msgtype'] == packets.UPDATETIME:
+            self.time = msg['time']
+        elif msg['msgtype'] == packets.SPAWNPOSITION:
+            self.spawn.fromMessage(msg)
+        elif msg['msgtype'] == packets.PLAYERPOSITIONLOOK:
+            self.player.fromMessage(msg)
+            self.backgroundUpdate()
+        elif msg['msgtype'] == packets.PRECHUNK:
+            # Remove the old chunk data, nothing to do really
+            pass
+        elif msg['msgtype'] == packets.CHUNK:
+            logging.debug("Chunk %s,%s,%s", msg['x'], msg['y'], msg['z'])
+        elif msg['msgtype'] == packets.PLAYERLIST:
+            if msg['online']:
+                self.players[msg['name']] = msg['ping']
+                logging.debug('Player %s @ %s ms', msg['name'], msg['ping'])
+            elif msg['name'] in self.players:
+                self.players.pop(msg['name'])
+        else:
+            logger.debug("Received message (size %i): %s", len(msg['raw_bytes']), msg)
 
 
 class MCBotFactory(protocol.ReconnectingClientFactory):

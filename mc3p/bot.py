@@ -230,6 +230,13 @@ class MCBot(MCProtocol):
     def chatReceived(self, message):
         logger.info('Chat message: %s', message)
 
+    def sendChat(self, message):
+        msg = {
+                'msgtype': packets.CHAT,
+                'chat_msg': message[:100],
+        }
+        self.sendMessage(msg)
+
     def sendPosition(self):
         reactor.callFromThread(self._backgroundUpdate)
 
@@ -260,16 +267,12 @@ class TestBot(MCBot):
 
     def serverJoined(self):
         self.pen = True
-        msg = {
-                'msgtype': packets.CREATIVEACTION,
-                'slot': 36,
-                'details': {
-                    'item_id': 0x04,
-                    'count': 1,
-                    'uses': 0,
-                }
+        self.pen_details = {
+                'item_id': 0x04,
+                'count': 1,
+                'uses': 0,
         }
-        self.sendMessage(msg)
+        self.setPenDetails()
 
         # Center bot on the block.
         self.position.x = math.floor(self.position.x) + 0.5
@@ -280,6 +283,14 @@ class TestBot(MCBot):
         self.position.stance -= oldy - self.position.y
 
         self.sendPosition()
+
+    def setPenDetails(self):
+        msg = {
+                'msgtype': packets.CREATIVEACTION,
+                'slot': 36,
+                'details': self.pen_details,
+        }
+        self.sendMessage(msg)
 
     def draw(self):
         if not self.pen:
@@ -302,11 +313,7 @@ class TestBot(MCBot):
                 'y': min(127, max(0, int(self.position.y)-2)),
                 'z': int(self.position.z),
                 'dir': 1,  # +Y
-                'details': {
-                    'item_id': 0x04,
-                    'count': 1,
-                    'uses': 0,
-                }
+                'details': self.pen_details,
         }
         self.sendMessage(msg)
 
@@ -316,10 +323,10 @@ class TestBot(MCBot):
             logger.info('Chat message: %s', message)
             return
         cmd = m.group(1).upper()
-        param = m.group(2) or None
+        param = m.group(2).strip() or None
         try:
             floatparam = float(param)
-        except TypeError:
+        except (TypeError, ValueError):
             floatparam = None
 
         if cmd == 'LT':
@@ -341,6 +348,15 @@ class TestBot(MCBot):
             self.draw()
         elif cmd == 'PU':
             self.pen = False
+        elif cmd == 'SETPEN':
+            m = re.search('^([0-9]+)\s*([0-9]+)?$', param)
+            if m:
+                self.pen_details['item_id'] = int(m.group(1))
+                self.pen_details['uses'] = int(m.group(2) or 0)
+                self.setPenDetails()
+                self.draw()
+            else:
+                self.sendChat('invalid')
         elif cmd == 'UP':
             self.position.y += 1
             self.position.stance += 1

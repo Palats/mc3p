@@ -271,6 +271,16 @@ class TestBot(MCBot):
         }
         self.sendMessage(msg)
 
+        # Center bot on the block.
+        self.position.x = math.floor(self.position.x) + 0.5
+        self.position.z = math.floor(self.position.z) + 0.5
+
+        oldy = self.position.y
+        self.position.y = math.floor(oldy)
+        self.position.stance -= oldy - self.position.y
+
+        self.sendPosition()
+
     def draw(self):
         if not self.pen:
             return

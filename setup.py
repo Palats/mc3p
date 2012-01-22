@@ -35,7 +35,9 @@ setup(
     keywords = "minecraft proxy",
     url = "http://mattmcgill.com/mc3p/%s-%s-%s.egg" % (basename, version, pyversion),
     install_requires = [
-        'Twisted'
+        'Twisted',
+        #'ipython>=0.12',
+        'bpython',
     ],
 )
 

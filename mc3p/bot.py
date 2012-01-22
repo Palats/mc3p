@@ -16,8 +16,8 @@
 import logging
 import signal
 import sys
+import threading
 from optparse import OptionParser
-
 
 from twisted.internet import reactor, protocol
 from twisted.python import log
@@ -28,15 +28,13 @@ import parsing
 import packets
 
 
-logger = logging.getLogger("mc3p")
+logger = logging.getLogger(__name__)
 
 
 def parse_args():
     """Return host and port, or print usage and exit."""
     usage = "usage: %prog [options] host [port]"
-    desc = """
-Create a Minecraft proxy listening for a client connection,
-and forward that connection to <host>:<port>."""
+    desc = """Minecraft bot"""
     parser = OptionParser(usage=usage,
                           description=desc)
     parser.add_option("-l", "--log-level", dest="loglvl", metavar="LEVEL",
@@ -68,7 +66,7 @@ and forward that connection to <host>:<port>."""
 
 class MCProtocol(protocol.Protocol):
     def connectionMade(self):
-        logging.debug('Protocol connectionMade.')
+        logger.debug('Protocol connectionMade.')
 
         self.protocol_id = 23
         self.send_spec = messages.protocol[self.protocol_id][0]
@@ -89,11 +87,11 @@ class MCProtocol(protocol.Protocol):
             msgtype = parsing.parse_unsigned_byte(self.stream)
             if not self.receive_spec[msgtype]:
                 raise parsing.UnsupportedPacketException(msgtype)
-            #logging.debug("Trying to parse message type %x" % (msgtype))
+            logger.debug("Trying to parse message type %x" % (msgtype))
             msg_parser = self.receive_spec[msgtype]
             msg = msg_parser.parse(self.stream)
             msg['raw_bytes'] = self.stream.packet_finished()
-            #logger.debug("Received message (size %i): %s", len(msg['raw_bytes']), msg)
+            logger.debug("Received message (size %i): %s", len(msg['raw_bytes']), msg)
             return msg
         except util.PartialPacketException:
             return None
@@ -210,15 +208,25 @@ class MCBot(MCProtocol):
             # Remove the old chunk data, nothing to do really
             pass
         elif msg['msgtype'] == packets.CHUNK:
-            logging.debug("Chunk %s,%s,%s", msg['x'], msg['y'], msg['z'])
+            logger.debug("Chunk %s,%s,%s", msg['x'], msg['y'], msg['z'])
         elif msg['msgtype'] == packets.PLAYERLIST:
             if msg['online']:
                 self.players[msg['name']] = msg['ping']
-                logging.debug('Player %s @ %s ms', msg['name'], msg['ping'])
+                logger.debug('Player %s @ %s ms', msg['name'], msg['ping'])
             elif msg['name'] in self.players:
                 self.players.pop(msg['name'])
         else:
-            logger.debug("Received message (size %i): %s", len(msg['raw_bytes']), msg)
+            logger.info("Received message (size %i): %s", len(msg['raw_bytes']), msg)
+
+    def move(self, x=None, y=None, z=None):
+        if x == y == z == None:
+            x = 1
+            y = 0
+            z = 0
+        self.player.x += x or 0
+        self.player.y += y or 0
+        self.player.z += z or 0
+        reactor.callFromThread(self.backgroundUpdate)
 
 
 class MCBotFactory(protocol.ReconnectingClientFactory):
@@ -228,7 +236,7 @@ class MCBotFactory(protocol.ReconnectingClientFactory):
     def buildProtocol(self, addr):
         print 'Connected. (resetting reconnection delay)'
         self.resetDelay()
-        return MCBot()
+        return self.bot
 
     def clientConnectionLost(self, connector, reason):
         print 'Lost connection.  Reason:', reason
@@ -240,15 +248,67 @@ class MCBotFactory(protocol.ReconnectingClientFactory):
                                                                   reason)
 
 
+
+def backgroundReactor():
+    reactor_thread = threading.Thread(target=reactor.run, kwargs={'installSignalHandlers': 0})
+    reactor_thread.setDaemon(True)
+    reactor_thread.start()
+
+
+def cliCommands(bot):
+    return {
+            'move': bot.move,
+    }
+
+
+def runIPython(bot):
+    """Run the bot and provide access to a python shell."""
+
+    import IPython
+
+    backgroundReactor()
+    IPython.embed(user_ns=cliCommands(bot))
+
+
+def runBPython(bot):
+    import bpython
+    backgroundReactor()
+    bpython.embed(locals_=cliCommands(bot))
+
+
+def run(bot):
+    """Just run the bot, without any interaction."""
+    reactor.run()
+
+
+class LogHandler(logging.StreamHandler):
+    def emit(self, record):
+        super(LogHandler, self).emit(record)
+        #print 'coin'
+
+
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.ERROR)
+    ch = LogHandler()
+    formatter = logging.Formatter(logging.BASIC_FORMAT)
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+
     (host, port, opts) = parse_args()
 
     if opts.logfile:
         util.config_logging(opts.logfile)
 
-    if opts.loglvl:
-        logging.root.setLevel(getattr(logging, opts.loglvl.upper()))
 
-    reactor.connectTCP(host, port, MCBotFactory())
-    reactor.run()
+    if opts.loglvl:
+        logger.root.setLevel(getattr(logging, opts.loglvl.upper()))
+
+
+    factory = MCBotFactory()
+    bot = MCBot()
+    factory.bot = bot
+    bot.factory = factory
+    reactor.connectTCP(host, port, factory)
+
+    run(bot)
+    #runIPython(bot)
+    #runBPython(bot)

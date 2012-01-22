@@ -168,6 +168,8 @@ class MCBot(MCProtocol):
         self.spawn = Spawn()
         self.players = {}
 
+        self.initialized = False
+
         self.sendMessage({'msgtype': packets.HANDSHAKE, 'username': 'palatstest'})
 
     def _backgroundUpdate(self):
@@ -208,6 +210,9 @@ class MCBot(MCProtocol):
         elif msg['msgtype'] == packets.PLAYERPOSITIONLOOK:
             self.position.fromMessage(msg)
             self._backgroundUpdate()
+            if not self.initialized:
+                self.initialized = True
+                self.serverJoined()
         elif msg['msgtype'] == packets.PRECHUNK:
             # Remove the old chunk data, nothing to do really
             pass
@@ -228,55 +233,92 @@ class MCBot(MCProtocol):
     def sendPosition(self):
         reactor.callFromThread(self._backgroundUpdate)
 
+    def serverJoined(self):
+        pass
+
 
 class TestBot(MCBot):
-    def move(self, x=None, y=None, z=None):
-        if x == y == z == None:
-            x = 1
-            y = 0
-            z = 0
-        self.position.x += x or 0
-        self.position.y += y or 0
-        self.position.z += z or 0
+    def move(self, distance):
+        if distance > 1:
+            remaining = distance - 1
+            distance = 1
+        elif distance < -1:
+            remaining = distance + 1
+            distance = -1
+        else:
+            remaining = 0
+
+        yaw = self.position.yaw * math.pi / 180
+
+        self.position.x += -math.sin(yaw) * distance
+        self.position.z += math.cos(yaw) * distance
         self.sendPosition()
+        self.draw()
+
+        if remaining:
+            reactor.callLater(0.100, self.move, remaining)
+
+    def serverJoined(self):
+        self.pen = True
+        msg = {
+                'msgtype': packets.CREATIVEACTION,
+                'slot': 36,
+                'details': {
+                    'item_id': 0x04,
+                    'count': 1,
+                    'uses': 0,
+                }
+        }
+        self.sendMessage(msg)
+
+    def draw(self):
+        if not self.pen:
+            return
+        msg = {
+                'msgtype': packets.PLAYERBLOCKPLACE,
+                'x': int(self.position.x),
+                'y': min(127, max(0, int(self.position.y)-2)),
+                'z': int(self.position.z),
+                'dir': 1,  # +Y
+                'details': {
+                    'item_id': 0x04,
+                    'count': 1,
+                    'uses': 0,
+                }
+        }
+        self.sendMessage(msg)
 
     def chatReceived(self, message):
-        m = re.search('^<[^>]+> (.+)$', message)
+        m = re.search('^<[^>]+> ([^ ]+)(.*)$', message)
         if not m:
             logger.info('Chat message: %s', message)
             return
-        tokens = re.split('\s+', m.group(1))
-
-        cmd = tokens[0].upper()
-        param = None
-        if len(tokens) > 1:
-            try:
-                param = float(tokens[1])
-            except ValueError:
-                param = None
+        cmd = m.group(1).upper()
+        param = m.group(2) or None
+        try:
+            floatparam = float(param)
+        except TypeError:
+            floatparam = None
 
         if cmd == 'LT':
-            param = param or 0
-            self.position.yaw += param
+            floatparam = floatparam or 0
+            self.position.yaw += floatparam
             self.sendPosition()
         elif cmd == 'RT':
-            param = param or 0
-            self.position.yaw -= param
+            floatparam = floatparam or 0
+            self.position.yaw -= floatparam
             self.sendPosition()
         elif cmd == 'FD':
-            param = param or 1
-            yaw = self.position.yaw * math.pi / 180
-
-            self.position.x += -math.sin(yaw) * param
-            self.position.z += math.cos(yaw) * param
-            self.sendPosition()
+            floatparam = floatparam or 1
+            self.move(floatparam)
         elif cmd == 'BK':
-            param = param or 1
-            yaw = self.position.yaw * math.pi / 180
-
-            self.position.x -= -math.sin(yaw) * param
-            self.position.z -= math.cos(yaw) * param
-            self.sendPosition()
+            floatparam = floatparam or 1
+            self.move(-floatparam)
+        elif cmd == 'PD':
+            self.pen = True
+            self.draw()
+        elif cmd == 'PU':
+            self.pen = False
 
 
 class MCBotFactory(protocol.ReconnectingClientFactory):

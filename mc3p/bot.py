@@ -14,9 +14,11 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 import logging
+import re
 import signal
 import sys
 import threading
+import math
 from optparse import OptionParser
 
 from twisted.internet import reactor, protocol
@@ -109,7 +111,7 @@ class MCProtocol(protocol.Protocol):
         pass
 
 
-class Player(object):
+class Position(object):
     def __init__(self):
         self.x = self.y = self.z = 0.0
         self.stance = 0.0
@@ -162,21 +164,21 @@ class MCBot(MCProtocol):
 
         self.delayed_call = None
         self.time = None
-        self.player = Player()
+        self.position = Position()
         self.spawn = Spawn()
         self.players = {}
 
         self.sendMessage({'msgtype': packets.HANDSHAKE, 'username': 'palatstest'})
 
-    def backgroundUpdate(self):
+    def _backgroundUpdate(self):
         msg = {'msgtype': packets.PLAYERPOSITIONLOOK}
-        msg.update(self.player.toMessage())
+        msg.update(self.position.toMessage())
         self.sendMessage(msg)
 
         if self.delayed_call:
             self.delayed_call.reset()
         else:
-            reactor.callLater(0.050, self.backgroundUpdate)
+            reactor.callLater(0.050, self._backgroundUpdate)
 
     def messageReceived(self, msg):
         if msg['msgtype'] == packets.KEEPALIVE:
@@ -197,13 +199,15 @@ class MCBot(MCProtocol):
                 'nu6': 0,
                 'nu7': '',
              })
+        elif msg['msgtype'] == packets.CHAT:
+            self.chatReceived(msg['chat_msg'])
         elif msg['msgtype'] == packets.UPDATETIME:
             self.time = msg['time']
         elif msg['msgtype'] == packets.SPAWNPOSITION:
             self.spawn.fromMessage(msg)
         elif msg['msgtype'] == packets.PLAYERPOSITIONLOOK:
-            self.player.fromMessage(msg)
-            self.backgroundUpdate()
+            self.position.fromMessage(msg)
+            self._backgroundUpdate()
         elif msg['msgtype'] == packets.PRECHUNK:
             # Remove the old chunk data, nothing to do really
             pass
@@ -218,15 +222,61 @@ class MCBot(MCProtocol):
         else:
             logger.info("Received message (size %i): %s", len(msg['raw_bytes']), msg)
 
+    def chatReceived(self, message):
+        logger.info('Chat message: %s', message)
+
+    def sendPosition(self):
+        reactor.callFromThread(self._backgroundUpdate)
+
+
+class TestBot(MCBot):
     def move(self, x=None, y=None, z=None):
         if x == y == z == None:
             x = 1
             y = 0
             z = 0
-        self.player.x += x or 0
-        self.player.y += y or 0
-        self.player.z += z or 0
-        reactor.callFromThread(self.backgroundUpdate)
+        self.position.x += x or 0
+        self.position.y += y or 0
+        self.position.z += z or 0
+        self.sendPosition()
+
+    def chatReceived(self, message):
+        m = re.search('^<[^>]+> (.+)$', message)
+        if not m:
+            logger.info('Chat message: %s', message)
+            return
+        tokens = re.split('\s+', m.group(1))
+
+        cmd = tokens[0].upper()
+        param = None
+        if len(tokens) > 1:
+            try:
+                param = float(tokens[1])
+            except ValueError:
+                param = None
+
+        if cmd == 'LT':
+            param = param or 0
+            self.position.yaw += param
+            self.sendPosition()
+        elif cmd == 'RT':
+            param = param or 0
+            self.position.yaw -= param
+            self.sendPosition()
+        elif cmd == 'FD':
+            param = param or 1
+            yaw = self.position.yaw * math.pi / 180
+
+            self.position.x += -math.sin(yaw) * param
+            self.position.z += math.cos(yaw) * param
+            self.sendPosition()
+        elif cmd == 'BK':
+            param = param or 1
+            yaw = self.position.yaw * math.pi / 180
+
+            self.position.x -= -math.sin(yaw) * param
+            self.position.z -= math.cos(yaw) * param
+            self.sendPosition()
 
 
 class MCBotFactory(protocol.ReconnectingClientFactory):
@@ -304,7 +354,7 @@ if __name__ == "__main__":
 
 
     factory = MCBotFactory()
-    bot = MCBot()
+    bot = TestBot()
     factory.bot = bot
     bot.factory = factory
     reactor.connectTCP(host, port, factory)

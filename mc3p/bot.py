@@ -275,6 +275,18 @@ class TestBot(MCBot):
         if not self.pen:
             return
         msg = {
+                'msgtype': packets.PLAYERBLOCKDIG,
+                'status': 0,
+                'x': int(self.position.x),
+                'y': min(127, max(0, int(self.position.y)-1)),
+                'z': int(self.position.z),
+                'face': 1,  # +Y
+        }
+        self.sendMessage(msg)
+        msg['status'] = 2
+        self.sendMessage(msg)
+
+        msg = {
                 'msgtype': packets.PLAYERBLOCKPLACE,
                 'x': int(self.position.x),
                 'y': min(127, max(0, int(self.position.y)-2)),
@@ -302,11 +314,11 @@ class TestBot(MCBot):
 
         if cmd == 'LT':
             floatparam = floatparam or 0
-            self.position.yaw += floatparam
+            self.position.yaw -= floatparam
             self.sendPosition()
         elif cmd == 'RT':
             floatparam = floatparam or 0
-            self.position.yaw -= floatparam
+            self.position.yaw += floatparam
             self.sendPosition()
         elif cmd == 'FD':
             floatparam = floatparam or 1
@@ -319,6 +331,14 @@ class TestBot(MCBot):
             self.draw()
         elif cmd == 'PU':
             self.pen = False
+        elif cmd == 'UP':
+            self.position.y += 1
+            self.position.stance += 1
+            self.sendPosition()
+        elif cmd == 'DOWN':
+            self.position.y -= 1
+            self.position.stance -= 1
+            self.sendPosition()
 
 
 class MCBotFactory(protocol.ReconnectingClientFactory):

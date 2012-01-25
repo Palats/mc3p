@@ -37,7 +37,8 @@ setup(
     install_requires = [
         'Twisted',
         #'ipython>=0.12',
-        'bpython',
+        #'bpython',
+        'lepl',
     ],
 )
 

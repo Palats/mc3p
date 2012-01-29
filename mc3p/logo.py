@@ -1,6 +1,6 @@
 import unittest
+import Queue
 import lepl
-#from lepl import *
 
 
 class Command(object):
@@ -71,6 +71,67 @@ def Grammar():
     return expr
 
 
+
+def CFList(cmd):
+    for subcmd in cmd:
+        yield subcmd
+
+
+def CFRepeat(cmd):
+    for i in xrange(cmd.value1):
+        yield cmd.value2
+
+
+class Logo(object):
+    def __init__(self):
+        self.queue = Queue.Queue()
+        self.runstack = []
+        self.expr = Grammar()
+
+    def parse(self, s):
+        ast = self.expr.parse(s)
+        self.queue.put(ast[0])
+
+    def run(self, cmd):
+        if isinstance(cmd, lepl.List):
+            for subcmd in cmd:
+                self.run(subcmd)
+        else:
+            if cmd.name == 'repeat':
+                for i in xrange(cmd.value1):
+                    self.run(cmd.value2)
+            else:
+                print 'Running %s...' % cmd.name
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        instn = None
+
+        while self.runstack and not instn:
+            try:
+                instn = self.runstack[-1].next()
+            except StopIteration:
+                self.runstack.pop()
+
+        if not instn:
+            try:
+                instn = self.queue.get(False)
+            except Queue.Empty:
+                raise StopIteration()
+
+        if isinstance(instn, lepl.List):
+            self.runstack.append(CFList(instn))
+            return self.next()
+
+        if instn.name == 'repeat':
+            self.runstack.append(CFRepeat(instn))
+            return self.next()
+
+        return instn
+
+
 class BasicTest(unittest.TestCase):
     def setUp(self):
         self.expr = Grammar()
@@ -106,6 +167,21 @@ class BasicTest(unittest.TestCase):
         self.assertRaises(lepl.FullFirstMatchException, self.expr.parse, 'rt 2 3')
         self.assertRaises(lepl.FullFirstMatchException, self.expr.parse, 'lt')
         self.assertRaises(lepl.FullFirstMatchException, self.expr.parse, 'repeat a [ fd 1]')
+
+
+class RunTest(unittest.TestCase):
+    def _run(self, s):
+        print '-----', s
+        d = self.expr.parse(s)
+        print d[0]
+        assert len(d) == 1
+
+    def testPlop(self):
+        l = Logo()
+        l.parse('fd 1; repeat 3 [ pu ; repeat 2 [ fd ] ; pd ]')
+
+        for instn in l:
+            print 'Running %s ...' % instn
 
 
 if __name__ == '__main__':

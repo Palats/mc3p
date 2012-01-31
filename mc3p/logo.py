@@ -31,6 +31,18 @@ class Command2(object):
         return 'Command2[%s, %s, %s]' % (self.name, self.value1, self.value2)
 
 
+FORWARD = 'forward'
+BACK = 'back'
+LEFT = 'left'
+RIGHT = 'right'
+PENUP = 'penup'
+PENDOWN = 'pendown'
+SETPEN = 'setpen'
+REPEAT = 'repeat'
+UP = 'up'
+DOWN = 'down'
+
+
 def NoCase(text):
     return lepl.Regexp(''.join('[{0}{1}]'.format(c.lower(), c.upper()) for c in text))
 
@@ -54,16 +66,18 @@ def Grammar():
     expr = flat_expr > List
     instr_list = ~Literal('[') & expr & ~Literal(']')
 
-    cmd_fd = Identifier('forward', 'fd') & Optional(space & number) > args(Command1)
-    cmd_bk = Identifier('back', 'bk') & Optional(space & number) > args(Command1)
-    cmd_lt = Identifier('left', 'lt') & space & number > args(Command1)
-    cmd_rt = Identifier('right', 'rt') & space & number > args(Command1)
-    cmd_pu = Identifier('penup', 'pu') > args(Command0)
-    cmd_pd = Identifier('pendown', 'pd') > args(Command0)
-    cmd_setpen = Identifier('setpen') & space & integer & space & integer > args(Command2)
-    cmd_repeat = Identifier('repeat') & space & integer & space & instr_list > args(Command2)
+    cmd_fd = Identifier(FORWARD, 'fd') & Optional(space & number) > args(Command1)
+    cmd_bk = Identifier(BACK, 'bk') & Optional(space & number) > args(Command1)
+    cmd_lt = Identifier(LEFT, 'lt') & space & number > args(Command1)
+    cmd_rt = Identifier(RIGHT, 'rt') & space & number > args(Command1)
+    cmd_pu = Identifier(PENUP, 'pu') > args(Command0)
+    cmd_pd = Identifier(PENDOWN, 'pd') > args(Command0)
+    cmd_up = Identifier(UP) > args(Command0)
+    cmd_down = Identifier(DOWN) > args(Command0)
+    cmd_setpen = Identifier(SETPEN) & space & integer & space & integer > args(Command2)
+    cmd_repeat = Identifier(REPEAT) & space & integer & space & instr_list > args(Command2)
 
-    all_cmd = cmd_fd | cmd_bk | cmd_setpen | cmd_lt | cmd_rt | cmd_repeat | cmd_pu | cmd_pd
+    all_cmd = cmd_fd | cmd_bk | cmd_setpen | cmd_lt | cmd_rt | cmd_repeat | cmd_pu | cmd_pd | cmd_up | cmd_down
 
     cmd_split = ~Space()[:] & ~Literal(';') & ~Space()[:]
     expr += ~Space()[:] & all_cmd & Optional(cmd_split & flat_expr) & Optional(cmd_split) & ~Space()[:]
@@ -92,17 +106,6 @@ class Logo(object):
         ast = self.expr.parse(s)
         self.queue.put(ast[0])
 
-    def run(self, cmd):
-        if isinstance(cmd, lepl.List):
-            for subcmd in cmd:
-                self.run(subcmd)
-        else:
-            if cmd.name == 'repeat':
-                for i in xrange(cmd.value1):
-                    self.run(cmd.value2)
-            else:
-                print 'Running %s...' % cmd.name
-
     def __iter__(self):
         return self
 
@@ -125,7 +128,7 @@ class Logo(object):
             self.runstack.append(CFList(instn))
             return self.next()
 
-        if instn.name == 'repeat':
+        if instn.name == REPEAT:
             self.runstack.append(CFRepeat(instn))
             return self.next()
 
@@ -180,6 +183,15 @@ class RunTest(unittest.TestCase):
         l = Logo()
         l.parse('fd 1; repeat 3 [ pu ; repeat 2 [ fd ] ; pd ]')
 
+        for instn in l:
+            print 'Running %s ...' % instn
+
+    def testRefeed(self):
+        l = Logo()
+        l.parse('fd 1')
+        for instn in l:
+            print 'Running %s ...' % instn
+        l.parse('fd 2')
         for instn in l:
             print 'Running %s ...' % instn
 

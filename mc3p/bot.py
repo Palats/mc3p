@@ -29,6 +29,8 @@ import messages
 import parsing
 import packets
 
+import logo
+
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +172,7 @@ class MCBot(MCProtocol):
 
         self.initialized = False
 
-        self.sendMessage({'msgtype': packets.HANDSHAKE, 'username': 'palatstest'})
+        self.sendMessage({'msgtype': packets.HANDSHAKE, 'username': 'turtle'})
 
     def _backgroundUpdate(self):
         msg = {'msgtype': packets.PLAYERPOSITIONLOOK}
@@ -192,7 +194,7 @@ class MCBot(MCProtocol):
             self.sendMessage({
                 'msgtype': packets.LOGIN,
                 'proto_version': 23,
-                'username': 'palatstest',
+                'username': 'turtle',
                 'nu1': 0,
                 'nu2': 0,
                 'nu3': 0,
@@ -238,34 +240,17 @@ class MCBot(MCProtocol):
         self.sendMessage(msg)
 
     def sendPosition(self):
-        reactor.callFromThread(self._backgroundUpdate)
+        self._backgroundUpdate()
 
     def serverJoined(self):
         pass
 
 
 class TestBot(MCBot):
-    def move(self, distance):
-        if distance > 1:
-            remaining = distance - 1
-            distance = 1
-        elif distance < -1:
-            remaining = distance + 1
-            distance = -1
-        else:
-            remaining = 0
-
-        yaw = self.position.yaw * math.pi / 180
-
-        self.position.x += -math.sin(yaw) * distance
-        self.position.z += math.cos(yaw) * distance
-        self.sendPosition()
-        self.draw()
-
-        if remaining:
-            reactor.callLater(0.100, self.move, remaining)
-
     def serverJoined(self):
+        self.current_cmd = None
+        self.logo = logo.Logo()
+
         self.pen = True
         self.pen_details = {
                 'item_id': 0x04,
@@ -284,6 +269,29 @@ class TestBot(MCBot):
 
         self.sendPosition()
 
+    def move(self, distance, callback=None):
+        if distance > 1:
+            remaining = distance - 1
+            distance = 1
+        elif distance < -1:
+            remaining = distance + 1
+            distance = -1
+        else:
+            remaining = 0
+
+        yaw = self.position.yaw * math.pi / 180
+
+        self.position.x += -math.sin(yaw) * distance
+        self.position.z += math.cos(yaw) * distance
+        self.sendPosition()
+        self.draw()
+
+        if remaining:
+            reactor.callLater(0.100, self.move, remaining, callback)
+        else:
+            if callback:
+                callback()
+
     def setPenDetails(self):
         msg = {
                 'msgtype': packets.CREATIVEACTION,
@@ -295,6 +303,7 @@ class TestBot(MCBot):
     def draw(self):
         if not self.pen:
             return
+
         msg = {
                 'msgtype': packets.PLAYERBLOCKDIG,
                 'status': 0,
@@ -318,53 +327,71 @@ class TestBot(MCBot):
         self.sendMessage(msg)
 
     def chatReceived(self, message):
-        m = re.search('^<[^>]+> ([^ ]+)(.*)$', message)
+        m = re.search('^<[^>]+> (.*)$', message)
         if not m:
             logger.info('Chat message: %s', message)
             return
-        cmd = m.group(1).upper()
-        param = m.group(2).strip() or None
-        try:
-            floatparam = float(param)
-        except (TypeError, ValueError):
-            floatparam = None
+        cmd = m.group(1)
+        self.logo.parse(cmd)
+        logging.info('Received new command: %s', cmd)
+        if not self.current_cmd:
+            self.sendContinue()
 
-        if cmd == 'LT':
-            floatparam = floatparam or 0
-            self.position.yaw -= floatparam
+    def sendContinue(self):
+        logging.info('sendContinue')
+        self.current_cmd = None
+        reactor.callFromThread(self._continue)
+
+    def _continue(self):
+        logging.info('_continue')
+        if self.current_cmd:
+            return
+
+        try:
+            cmd = self.logo.next()
+        except StopIteration:
+            logging.info('No remaining commands')
+            return
+
+        self.current_cmd = cmd
+
+        logging.info('Executing command %s', self.current_cmd)
+
+        if cmd.name == logo.LEFT:
+            self.position.yaw -= cmd.value
             self.sendPosition()
-        elif cmd == 'RT':
-            floatparam = floatparam or 0
-            self.position.yaw += floatparam
+            self.sendContinue()
+        elif cmd.name == logo.RIGHT:
+            self.position.yaw += cmd.value
             self.sendPosition()
-        elif cmd == 'FD':
-            floatparam = floatparam or 1
-            self.move(floatparam)
-        elif cmd == 'BK':
-            floatparam = floatparam or 1
-            self.move(-floatparam)
-        elif cmd == 'PD':
+            self.sendContinue()
+        elif cmd.name == logo.FORWARD:
+            self.move(cmd.value or 1, self.sendContinue)
+        elif cmd.name == logo.BACK:
+            self.move(-cmd.value or -1, self.sendContinue)
+        elif cmd.name == logo.PENDOWN:
             self.pen = True
             self.draw()
-        elif cmd == 'PU':
+            self.sendContinue()
+        elif cmd.name == logo.PENUP:
             self.pen = False
-        elif cmd == 'SETPEN':
-            m = re.search('^([0-9]+)\s*([0-9]+)?$', param)
-            if m:
-                self.pen_details['item_id'] = int(m.group(1))
-                self.pen_details['uses'] = int(m.group(2) or 0)
-                self.setPenDetails()
-                self.draw()
-            else:
-                self.sendChat('invalid')
-        elif cmd == 'UP':
+            self.sendContinue()
+        elif cmd.name == logo.SETPEN:
+            self.pen_details['item_id'] = cmd.value1
+            self.pen_details['uses'] = cmd.value2
+            self.setPenDetails()
+            self.draw()
+            self.sendContinue()
+        elif cmd.name == logo.UP:
             self.position.y += 1
             self.position.stance += 1
             self.sendPosition()
-        elif cmd == 'DOWN':
+            self.sendContinue()
+        elif cmd.name == logo.DOWN:
             self.position.y -= 1
             self.position.stance -= 1
             self.sendPosition()
+            self.sendContinue()
 
 
 class MCBotFactory(protocol.ReconnectingClientFactory):

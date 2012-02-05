@@ -20,8 +20,9 @@ import sys
 import threading
 import math
 from optparse import OptionParser
+import time
 
-from twisted.internet import reactor, protocol
+from twisted.internet import reactor, protocol, defer
 from twisted.python import log
 
 import util
@@ -33,6 +34,10 @@ import logo
 
 
 logger = logging.getLogger(__name__)
+
+
+def clock():
+    return time.time()
 
 
 def parse_args():
@@ -114,11 +119,29 @@ class MCProtocol(protocol.Protocol):
 
 
 class Position(object):
-    def __init__(self):
-        self.x = self.y = self.z = 0.0
-        self.stance = 0.0
-        self.yaw = self.pitch = 0.0
-        self.on_ground = True
+    def __init__(self, source=None):
+        if source:
+            self.x = source.x
+            self.y = source.y
+            self.z = source.z
+            self.stance = source.stance
+            self.yaw = source.yaw
+            self.pitch = source.pitch
+            self.on_ground = source.on_ground
+        else:
+            self.x = self.y = self.z = 0.0
+            self.stance = 0.0
+            self.yaw = self.pitch = 0.0
+            self.on_ground = True
+
+    def __eq__(self, other):
+        return (self.x == other.x and
+                self.y == other.y and
+                self.z == other.z and
+                self.stance == other.stance and
+                self.yaw == other.yaw and
+                self.pitch == other.pitch and
+                self.on_ground == other.on_ground)
 
     def fromMessage(self, msg):
         self.x = msg['x']
@@ -144,9 +167,11 @@ class Position(object):
 
 class Spawn(object):
     def __init__(self):
+        self.timestamp = clock()
         self.x = self.y = self.z = 0.0
 
     def fromMessage(self, msg):
+        self.timestamp = clock()
         self.x = msg['x']
         self.y = msg['y']
         self.z = msg['z']
@@ -164,25 +189,60 @@ class MCBot(MCProtocol):
     def connectionMade(self):
         MCProtocol.connectionMade(self)
 
+        self.username = 'turtle'
+        self.tick = 0.050
+        self.max_move_per_tick = 1.0
+
         self.delayed_call = None
-        self.time = None
-        self.position = Position()
+        self.world_time = None
+
         self.spawn = Spawn()
         self.players = {}
 
+        self.current_position = Position()
+        self._resetMoveTo()
+
         self.initialized = False
 
-        self.sendMessage({'msgtype': packets.HANDSHAKE, 'username': 'turtle'})
+        self.sendMessage({'msgtype': packets.HANDSHAKE, 'username': self.username})
+
+    def _resetMoveTo(self):
+        self.target_position = None
+        self._on_target = None
 
     def _backgroundUpdate(self):
+        if self.target_position:
+            if self.target_position == self.current_position:
+                reactor.callLater(0, self._on_target.callback, True)
+                self._resetMoveTo()
+            else:
+                self.current_position.yaw = self.target_position.yaw
+                self.current_position.pitch = self.target_position.pitch
+                self.current_position.on_ground = self.target_position.on_ground
+
+                d_x = self.target_position.x - self.current_position.x
+                d_y = self.target_position.y - self.current_position.y
+                d_z = self.target_position.z - self.current_position.z
+                d = math.sqrt(d_x*d_x + d_y*d_y + d_z*d_z)
+                if d == 0:
+                    print '### bok', d_x, d_y, d_z
+                    r = 0
+                else:
+                    r = min(1.0, self.max_move_per_tick / d)
+
+                self.current_position.x += r * d_x
+                self.current_position.y += r * d_y
+                self.current_position.z += r * d_z
+                self.current_position.stance += r * d_y
+
         msg = {'msgtype': packets.PLAYERPOSITIONLOOK}
-        msg.update(self.position.toMessage())
+        msg.update(self.current_position.toMessage())
         self.sendMessage(msg)
 
         if self.delayed_call:
             self.delayed_call.reset()
         else:
-            reactor.callLater(0.050, self._backgroundUpdate)
+            reactor.callLater(self.tick, self._backgroundUpdate)
 
     def messageReceived(self, msg):
         if msg['msgtype'] == packets.KEEPALIVE:
@@ -194,7 +254,7 @@ class MCBot(MCProtocol):
             self.sendMessage({
                 'msgtype': packets.LOGIN,
                 'proto_version': 23,
-                'username': 'turtle',
+                'username': self.username,
                 'nu1': 0,
                 'nu2': 0,
                 'nu3': 0,
@@ -206,12 +266,22 @@ class MCBot(MCProtocol):
         elif msg['msgtype'] == packets.CHAT:
             self.chatReceived(msg['chat_msg'])
         elif msg['msgtype'] == packets.UPDATETIME:
-            self.time = msg['time']
+            self.world_time = msg['time']
         elif msg['msgtype'] == packets.SPAWNPOSITION:
             self.spawn.fromMessage(msg)
         elif msg['msgtype'] == packets.PLAYERPOSITIONLOOK:
-            self.position.fromMessage(msg)
-            self._backgroundUpdate()
+            # When the server is unhappy about our position, we need to
+            # acknowledge back.
+            new_position = Position()
+            new_position.fromMessage(msg)
+            if new_position != self.current_position:
+                self.current_position = new_position
+
+                if self._on_target:
+                    reactor.callLater(0, self._on_target.callback, False)
+                self._resetMoveTo()
+                self._backgroundUpdate()
+
             if not self.initialized:
                 self.initialized = True
                 self.serverJoined()
@@ -239,8 +309,17 @@ class MCBot(MCProtocol):
         }
         self.sendMessage(msg)
 
-    def sendPosition(self):
-        self._backgroundUpdate()
+    def moveTo(self, target=None, x=None, y=None, z=None, yaw=None, pitch=None):
+        target = target or Position(self.current_position)
+        target.x += x or 0
+        target.y += y or 0
+        target.z += z or 0
+        target.stance += y or 0
+        target.yaw += yaw or 0
+        target.pitch += pitch or 0
+        self.target_position = target
+        self._on_target = defer.Deferred()
+        return self._on_target
 
     def serverJoined(self):
         pass
@@ -260,16 +339,26 @@ class TestBot(MCBot):
         self.setPenDetails()
 
         # Center bot on the block.
-        self.position.x = math.floor(self.position.x) + 0.5
-        self.position.z = math.floor(self.position.z) + 0.5
+        target = Position(self.current_position)
+        target.x = math.floor(target.x) + 0.5
+        target.z = math.floor(target.z) + 0.5
 
-        oldy = self.position.y
-        self.position.y = math.floor(oldy)
-        self.position.stance -= oldy - self.position.y
+        oldy = target.y
+        target.y = math.floor(oldy)
+        target.stance -= oldy - target.y
 
-        self.sendPosition()
+        self.moveTo(target)
 
-    def move(self, distance, callback=None):
+    def _continueMove(self, success, distance, fullmove_deferred):
+        if not success:
+            reactor.callLater(0, fullmove_deferred.callback, False)
+            return
+
+        self.draw()
+        if not distance:
+            reactor.callLater(0, fullmove_deferred.callback, True)
+            return
+
         if distance > 1:
             remaining = distance - 1
             distance = 1
@@ -279,18 +368,19 @@ class TestBot(MCBot):
         else:
             remaining = 0
 
-        yaw = self.position.yaw * math.pi / 180
+        yaw = self.current_position.yaw * math.pi / 180
 
-        self.position.x += -math.sin(yaw) * distance
-        self.position.z += math.cos(yaw) * distance
-        self.sendPosition()
-        self.draw()
+        position = Position(self.current_position)
+        position.x += -math.sin(yaw) * distance
+        position.z += math.cos(yaw) * distance
 
-        if remaining:
-            reactor.callLater(0.100, self.move, remaining, callback)
-        else:
-            if callback:
-                callback()
+        d = self.moveTo(position)
+        d.addCallback(self._continueMove, remaining, fullmove_deferred)
+
+    def move(self, distance):
+        d = defer.Deferred()
+        self._continueMove(True, distance, d)
+        return d
 
     def setPenDetails(self):
         msg = {
@@ -307,9 +397,9 @@ class TestBot(MCBot):
         msg = {
                 'msgtype': packets.PLAYERBLOCKDIG,
                 'status': 0,
-                'x': int(self.position.x),
-                'y': min(127, max(0, int(self.position.y)-1)),
-                'z': int(self.position.z),
+                'x': int(self.current_position.x),
+                'y': min(127, max(0, int(self.current_position.y)-1)),
+                'z': int(self.current_position.z),
                 'face': 1,  # +Y
         }
         self.sendMessage(msg)
@@ -318,9 +408,9 @@ class TestBot(MCBot):
 
         msg = {
                 'msgtype': packets.PLAYERBLOCKPLACE,
-                'x': int(self.position.x),
-                'y': min(127, max(0, int(self.position.y)-2)),
-                'z': int(self.position.z),
+                'x': int(self.current_position.x),
+                'y': min(127, max(0, int(self.current_position.y)-2)),
+                'z': int(self.current_position.z),
                 'dir': 1,  # +Y
                 'details': self.pen_details,
         }
@@ -337,7 +427,7 @@ class TestBot(MCBot):
         if not self.current_cmd:
             self.sendContinue()
 
-    def sendContinue(self):
+    def sendContinue(self, success=True):
         logging.info('sendContinue')
         self.current_cmd = None
         reactor.callFromThread(self._continue)
@@ -358,17 +448,13 @@ class TestBot(MCBot):
         logging.info('Executing command %s', self.current_cmd)
 
         if cmd.name == logo.LEFT:
-            self.position.yaw -= cmd.value
-            self.sendPosition()
-            self.sendContinue()
+            self.moveTo(yaw=-cmd.value).addCallback(self.sendContinue)
         elif cmd.name == logo.RIGHT:
-            self.position.yaw += cmd.value
-            self.sendPosition()
-            self.sendContinue()
+            self.moveTo(yaw=cmd.value).addCallback(self.sendContinue)
         elif cmd.name == logo.FORWARD:
-            self.move(cmd.value or 1, self.sendContinue)
+            self.move(cmd.value or 1).addCallback(self.sendContinue)
         elif cmd.name == logo.BACK:
-            self.move(-cmd.value or -1, self.sendContinue)
+            self.move(-cmd.value or -1).addCallback(self.sendContinue)
         elif cmd.name == logo.PENDOWN:
             self.pen = True
             self.draw()
@@ -383,15 +469,9 @@ class TestBot(MCBot):
             self.draw()
             self.sendContinue()
         elif cmd.name == logo.UP:
-            self.position.y += 1
-            self.position.stance += 1
-            self.sendPosition()
-            self.sendContinue()
+            self.moveTo(y=1).addCallback(self.sendContinue)
         elif cmd.name == logo.DOWN:
-            self.position.y -= 1
-            self.position.stance -= 1
-            self.sendPosition()
-            self.sendContinue()
+            self.moveTo(y=-1).addCallback(self.sendContinue)
 
 
 class MCBotFactory(protocol.ReconnectingClientFactory):

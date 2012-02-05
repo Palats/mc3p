@@ -225,7 +225,6 @@ class MCBot(MCProtocol):
                 d_z = self.target_position.z - self.current_position.z
                 d = math.sqrt(d_x*d_x + d_y*d_y + d_z*d_z)
                 if d == 0:
-                    print '### bok', d_x, d_y, d_z
                     r = 0
                 else:
                     r = min(1.0, self.max_move_per_tick / d)
